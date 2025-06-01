@@ -1,6 +1,7 @@
 # Open Source Software Attribution Generator
 
 [![Built with Cursor](https://img.shields.io/badge/Built%20with-Cursor-2ea44f)](https://cursor.sh)
+[![Pylint](https://github.com/yourusername/Attribution_Generator/actions/workflows/pylint.yml/badge.svg)](https://github.com/yourusername/Attribution_Generator/actions/workflows/pylint.yml)
 
 A Python tool to generate attribution files for open source software dependencies, with enhanced support for license expressions, "others" URLs, global project configuration, and component modification details.
 
@@ -120,6 +121,14 @@ This project uses `pyproject.toml` for dependency management and `uv` as the pac
 - pandas (>=1.5.0)
 - PyYAML (>=6.0)
 - openpyxl (>=3.0.0)
+
+### Code Quality
+
+The project maintains high code quality standards through:
+- Automated Pylint checks on every push
+- Testing against Python 3.8, 3.9, and 3.10
+- Comprehensive docstrings and type hints
+- PEP 8 style compliance
 
 ## License
 
