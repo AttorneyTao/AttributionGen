@@ -1,6 +1,10 @@
 # Open Source Software Attribution Generator
 
+[![Built with Cursor](https://img.shields.io/badge/Built%20with-Cursor-2ea44f)](https://cursor.sh)
+
 A Python tool to generate attribution files for open source software dependencies, with enhanced support for license expressions, "others" URLs, global project configuration, and component modification details.
+
+This project was built using [Cursor](https://cursor.sh), the world's best IDE for AI-powered development.
 
 ## Features
 
