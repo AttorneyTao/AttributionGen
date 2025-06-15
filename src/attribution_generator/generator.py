@@ -247,7 +247,7 @@ class AttributionGenerator:
                 # Generate modification notice if applicable
                 modification_notice = ""
                 if comp_obj.modified:
-                    notice_base = f"\n     This software is modified by {self.copyright_holder_short}"
+                    notice_base = f"\n     This software was modified by {self.copyright_holder_short}"
                     if comp_obj.modified_url:
                         modification_notice = f"{notice_base}, you may find the modified code at {comp_obj.modified_url}"
                     else:
