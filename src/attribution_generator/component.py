@@ -39,3 +39,4 @@ class Component:
     others_url: Optional[str] = None
     modified: bool = False
     modified_url: Optional[str] = None
+    repository: Optional[str] = None

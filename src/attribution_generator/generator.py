@@ -17,6 +17,7 @@ from attribution_generator.component import Component
 from attribution_generator.license_manager import LicenseManager
 from attribution_generator.template_manager import TemplateManager
 from typing import List, Dict
+from dataclasses import fields
 
 class AttributionGenerator:
     """
@@ -78,6 +79,40 @@ class AttributionGenerator:
         s_str = str(s).lower().strip()
         return s_str in ['true', '1', 't', 'y', 'yes']
 
+    def _build_column_mapping(self, columns, component_fields):
+        """
+        自动建立表头与Component字段的映射，支持常见别名。
+        """
+        mapping = {}
+        for col_name_obj in columns:
+            col_name_str = str(col_name_obj)
+            col_lower = col_name_str.lower().strip()
+            if col_lower in component_fields:
+                mapping[component_fields[col_lower]] = col_name_str
+            elif col_lower in ['repo', 'source_url'] and 'repository' in component_fields:
+                mapping['repository'] = col_name_str
+            elif col_lower in ['notice_url'] and 'others_url' in component_fields:
+                mapping['others_url'] = col_name_str
+            # 可继续扩展别名
+        return mapping
+
+    def _row_to_component_kwargs(self, row, column_mapping, component_fields):
+        """
+        将一行数据（dict或Series）转换为Component的参数字典。
+        """
+        kwargs = {}
+        for field in component_fields:
+            excel_col = column_mapping.get(field)
+            if excel_col:
+                value = self._clean_excel_string(row.get(excel_col, ''))
+                if value == '':
+                    value = None
+                kwargs[field] = value
+        # 特殊处理布尔型
+        if 'modified' in kwargs and kwargs['modified'] is not None:
+            kwargs['modified'] = self._str_to_bool(kwargs['modified'])
+        return kwargs
+
     def load_components(self, input_file: str) -> List[Component]:
         """
         Load components from input file.
@@ -96,84 +131,51 @@ class AttributionGenerator:
             ValueError: If file format is invalid or required fields are missing
         """
         input_path = Path(input_file)
-        if not input_path.exists(): raise FileNotFoundError(f"Input file {input_file} not found.")
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file {input_file} not found.")
         components = []
+        component_fields = {f.name.lower(): f.name for f in fields(Component)}
 
         if input_path.suffix.lower() in ['.xlsx', '.xls']:
             try:
-                # Read Excel file with string dtype to preserve formatting
                 df = pd.read_excel(input_path, dtype=str)
                 df.fillna('', inplace=True)
-                
-                # Map column names to standardized field names
-                column_mapping = {}
-                for col_name_obj in df.columns:
-                    col_name_str = str(col_name_obj)
-                    col_lower = col_name_str.lower().strip()
-                    if 'component_name' in col_lower or col_lower == 'name': column_mapping['name'] = col_name_str
-                    elif 'copyright' in col_lower: column_mapping['copyright'] = col_name_str
-                    elif 'license' in col_lower: column_mapping['license'] = col_name_str
-                    elif 'version' in col_lower: column_mapping['version'] = col_name_str
-                    elif 'others_url' in col_lower or 'notice_url' in col_lower: column_mapping['others_url'] = col_name_str
-                    elif 'modified' == col_lower: column_mapping['modified'] = col_name_str
-                    elif 'modified_url' in col_lower : column_mapping['modified_url'] = col_name_str
-                
-                # Validate required fields
+                column_mapping = self._build_column_mapping(df.columns, component_fields)
                 required_fields = ['name', 'copyright', 'license']
                 missing_fields = [f for f in required_fields if f not in column_mapping]
-                if missing_fields: raise ValueError(f"Missing required columns in Excel: {missing_fields}. Available: {list(df.columns)}")
-
-                # Process each row into a Component object
+                if missing_fields:
+                    raise ValueError(f"Missing required columns in Excel: {missing_fields}. Available: {list(df.columns)}")
                 for _, row in df.iterrows():
-                    name = self._clean_excel_string(row.get(column_mapping.get('name'), ''))
-                    if not name: continue
-                    copyright_str = self._clean_excel_string(row.get(column_mapping.get('copyright'), ''))
-                    license_expr = self._clean_excel_string(row.get(column_mapping.get('license'), ''))
-                    version = self._clean_excel_string(row.get(column_mapping.get('version'), '')) or None
-                    
-                    modified_str = self._clean_excel_string(row.get(column_mapping.get('modified'), 'false'))
-                    modified = self._str_to_bool(modified_str)
-                    modified_url = self._clean_excel_string(row.get(column_mapping.get('modified_url'), '')) or None
-                    
-                    others_url = self._clean_excel_string(row.get(column_mapping.get('others_url'), '')) or None
-                    
-                    if not license_expr: print(f"⚠️ Warning: Missing license for '{name}'.")
-                    components.append(Component(name, copyright_str, license_expr, version, others_url, modified, modified_url))
-            except Exception as e: raise ValueError(f"Error reading Excel '{input_file}': {e}")
-        
+                    kwargs = self._row_to_component_kwargs(row, column_mapping, component_fields)
+                    component = Component(**kwargs)
+                    components.append(component)
+            except Exception as e:
+                raise ValueError(f"Error reading Excel '{input_file}': {e}")
+
         elif input_path.suffix.lower() in ['.json', '.yaml', '.yml']:
             try:
-                # Read JSON or YAML file
                 with open(input_path, 'r', encoding='utf-8') as f:
                     data_source = json.load(f) if input_path.suffix.lower() == '.json' else yaml.safe_load(f)
-                
-                # Extract component list from data structure
                 data_list = []
-                if isinstance(data_source, list): data_list = data_source
+                if isinstance(data_source, list):
+                    data_list = data_source
                 elif isinstance(data_source, dict) and 'components' in data_source and isinstance(data_source['components'], list):
                     data_list = data_source['components']
-                else: raise ValueError(f"Invalid format in {input_path.name}. Expected list or dict with 'components' key.")
-
-                # Process each component into a Component object
+                else:
+                    raise ValueError(f"Invalid format in {input_path.name}. Expected list or dict with 'components' key.")
+                # 直接用字段名做映射
+                column_mapping = {k: k for k in component_fields}
                 for item in data_list:
                     if not isinstance(item, dict):
-                        print(f"⚠️ Skipping non-dict item in {input_path.name}: {item}"); continue
-                    name = self._clean_excel_string(item.get('name', ''))
-                    if not name: print(f"⚠️ Skipping component with no name: {item}"); continue
-                    
-                    copyright_str = self._clean_excel_string(item.get('copyright', ''))
-                    license_expr = self._clean_excel_string(item.get('license', ''))
-                    version = self._clean_excel_string(item.get('version', '')) or None
-                    others_url = self._clean_excel_string(item.get('others_url', '')) or None
-                    
-                    modified_input = item.get('modified', False)
-                    modified = self._str_to_bool(modified_input)
-                    modified_url = self._clean_excel_string(item.get('modified_url', '')) or None
-
-                    if not license_expr: print(f"⚠️ Missing license for '{name}' in {input_path.name}.")
-                    components.append(Component(name, copyright_str, license_expr, version, others_url, modified, modified_url))
-            except Exception as e: raise ValueError(f"Error reading {input_path.name}: {e}")
-        else: raise ValueError(f"Unsupported input file: {input_path.suffix}.")
+                        print(f"⚠️ Skipping non-dict item in {input_path.name}: {item}")
+                        continue
+                    kwargs = self._row_to_component_kwargs(item, column_mapping, component_fields)
+                    component = Component(**kwargs)
+                    components.append(component)
+            except Exception as e:
+                raise ValueError(f"Error reading {input_path.name}: {e}")
+        else:
+            raise ValueError(f"Unsupported input file: {input_path.suffix}.")
         return components
 
     def group_by_license(self, components: List[Component]) -> Dict[str, List[Component]]:
@@ -244,7 +246,6 @@ class AttributionGenerator:
             # Process components in this license group
             components_with_others_urls_in_group = []
             for idx, comp_obj in enumerate(component_list, start=1):
-                # Generate modification notice if applicable
                 modification_notice = ""
                 if comp_obj.modified:
                     mod_url_clause = ""
@@ -256,12 +257,24 @@ class AttributionGenerator:
                         copyright_holder_short=self.copyright_holder_short,
                         modified_url_clause=mod_url_clause
                     )
-                
-                # Add component listing
+
+                repository_statement = ""
+                if getattr(comp_obj, "repository", None):
+                    repository_statement = self.template_manager.get_template("repository_statement").format(
+                        repository=comp_obj.repository
+                    )
+
+                version_display = ""
+                if comp_obj.version and str(comp_obj.version).strip():
+                    version_display = self.template_manager.get_template("version_display").format(version=comp_obj.version)
                 output_parts.append(self.template_manager.get_template("component_listing").format(
-                    serial_number=idx, name=comp_obj.name, 
-                    copyright=comp_obj.copyright, version=comp_obj.version or "N/A",
-                    modification_notice=modification_notice
+                    serial_number=idx,
+                    name=comp_obj.name,
+                    version=comp_obj.version or "",
+                    version_display=version_display,
+                    copyright=comp_obj.copyright,
+                    modification_notice=modification_notice,
+                    repository_statement=repository_statement
                 ))
                 
                 # Track components with "others" URLs

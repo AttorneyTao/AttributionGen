@@ -14,52 +14,41 @@
 header: |
 
   This project is built on and with the aid of the following open source projects. Credits are given to these projects.
-
-
 # UPDATE THIS SECTION
 license_group_header: |
 
   Open Source Software Licensed under the {license_id}:
   --------------------------------------------------------------------
-
 # This line above is crucial for printing the license text.
-
-
 # The important part is that {license_text} is included.
-
 # ADD THIS NEW TEMPLATE (or customize it)
 # This template will be used for each component listed under a license group.
 component_listing: |
-  {serial_number}. {name}
+  {serial_number}. {name}{version_display}
   {copyright}
+  
   {modification_notice}
+  {repository_statement}
 # Note: No {license_text} here, as it's shown once in license_group_header
-
-
 separator: "--------------------------------------------------------------------"
-
 inter_license_separator: "--------------------------------------------------------------------" 
-
-
 license_group_footer: |
   Terms of the {license_id}:
   --------------------------------------------------------------------
   {license_text}
-
-
-
 others_url_section_header: |
 
   Additional 'Others' Notices/URLs for components in this group:
   --------------------------------------------------------------------
 others_url_item: "  {component_serial_number}. {component_name}: {others_url}"
-
 modification_notice: |
-  This software was modified by {copyright_holder_short}{modified_url_clause}.
-modification_url_clause: ", you may find the modified code at {modified_url}"
-
-
-
+  This software was modified by {copyright_holder_short}{modified_url_clause}
+modification_url_clause: |
+  , you may find the modified code at {modified_url}
+version_display: |
+  @{version}
+repository_statement: |
+  You may obtain the source code and detailed information about this component at {repository}
 footer: |
 
   ==================================================
