@@ -1,12 +1,19 @@
 # Your existing header - this is fine
+# for open source projects, you can keep it as is.
+# header: |
+
+
+#   {project_name} Copyright (C) 2025 {copyright_holder_full}.  All rights reserved. 
+  
+#   The below software in this distribution may have been modified by {copyright_holder_full} ("{copyright_holder_short} Modifications"). All {copyright_holder_short} Modifications are Copyright (C) 2025  by {copyright_holder_full}
+  
+#   {project_name} project is built on and with the aid of the following open source projects. Credits are given to these projects.
+
+# for non-open source projects
+
 header: |
 
-
-  {project_name} Copyright (C) 2025 {copyright_holder_full}.  All rights reserved. 
-  
-  The below software in this distribution may have been modified by {copyright_holder_full} ("{copyright_holder_short} Modifications"). All {copyright_holder_short} Modifications are Copyright (C) 2025  by {copyright_holder_full}
-  
-  {project_name} project is built on and with the aid of the following open source projects. Credits are given to these projects.
+  This project is built on and with the aid of the following open source projects. Credits are given to these projects.
 
 
 # UPDATE THIS SECTION
@@ -47,8 +54,15 @@ others_url_section_header: |
   --------------------------------------------------------------------
 others_url_item: "  {component_serial_number}. {component_name}: {others_url}"
 
+modification_notice: |
+  This software was modified by {copyright_holder_short}{modified_url_clause}.
+modification_url_clause: ", you may find the modified code at {modified_url}"
+
+
 
 footer: |
 
   ==================================================
-  End of the Attribution Notice of {project_name}
+  End of the Attribution Notice of this project.
+
+

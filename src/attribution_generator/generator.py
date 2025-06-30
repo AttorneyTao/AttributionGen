@@ -247,11 +247,15 @@ class AttributionGenerator:
                 # Generate modification notice if applicable
                 modification_notice = ""
                 if comp_obj.modified:
-                    notice_base = f"\n     This software was modified by {self.copyright_holder_short}"
+                    mod_url_clause = ""
                     if comp_obj.modified_url:
-                        modification_notice = f"{notice_base}, you may find the modified code at {comp_obj.modified_url}"
-                    else:
-                        modification_notice = f"{notice_base}."
+                        mod_url_clause = self.template_manager.get_template("modification_url_clause").format(
+                            modified_url=comp_obj.modified_url
+                        )
+                    modification_notice = self.template_manager.get_template("modification_notice").format(
+                        copyright_holder_short=self.copyright_holder_short,
+                        modified_url_clause=mod_url_clause
+                    )
                 
                 # Add component listing
                 output_parts.append(self.template_manager.get_template("component_listing").format(

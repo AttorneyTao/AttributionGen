@@ -35,7 +35,7 @@ def main():
     """
     # --- Global Configuration ---
     # These values are used in the generated attribution file
-    PROJECT_NAME = "MOK"  # Name of your project
+    PROJECT_NAME = "Lockstep"  # Name of your project
     COPYRIGHT_HOLDER_FULL = "THL A29 Limited, a Tencent company."  # Full legal name
     COPYRIGHT_HOLDER_SHORT = "Tencent"  # Short name for notices
     # --- End Global Configuration ---
