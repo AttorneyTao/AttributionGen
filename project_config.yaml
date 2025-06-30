@@ -1,0 +1,10 @@
+project_name: Lockstep
+copyright_holder_full: Tencent
+copyright_holder_short: Tencent
+input_file: components.xlsx
+output_file: ATTRIBUTIONS.txt
+license_config: licenses.yaml
+template_config: templates.yaml
+license_serial_starts:
+  MIT: 1
+  BSD-3-Clause: 1

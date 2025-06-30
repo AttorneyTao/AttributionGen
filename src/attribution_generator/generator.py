@@ -31,7 +31,8 @@ class AttributionGenerator:
     """
 
     def __init__(self, license_config: str, template_config: str, 
-                 project_name: str, copyright_holder_full: str, copyright_holder_short: str):
+                 project_name: str, copyright_holder_full: str, copyright_holder_short: str,
+                 license_serial_starts: dict = None):
         """
         Initialize the attribution generator.
         
@@ -47,6 +48,7 @@ class AttributionGenerator:
         self.project_name = project_name
         self.copyright_holder_full = copyright_holder_full
         self.copyright_holder_short = copyright_holder_short
+        self.license_serial_starts = license_serial_starts or {}
 
     def _clean_excel_string(self, text: any) -> str:
         """
@@ -231,21 +233,9 @@ class AttributionGenerator:
         sorted_grouped_items = sorted(grouped_components.items(), key=lambda item: item[0].lower())
 
         for i, (license_expr_key, component_list) in enumerate(sorted_grouped_items):
-            # Add separator between license groups
-            if i > 0:
-                output_parts.append("")
-                output_parts.append(self.template_manager.get_template("inter_license_separator"))
-                output_parts.append("")
-
-            # Add license group header
-            output_parts.append(self.template_manager.get_template("license_group_header").format(
-                license_id=license_expr_key,
-                copyright_holder_short=self.copyright_holder_short 
-            ))
-            
-            # Process components in this license group
-            components_with_others_urls_in_group = []
-            for idx, comp_obj in enumerate(component_list, start=1):
+            serial_start = self.license_serial_starts.get(license_expr_key, 1)
+            for offset, comp_obj in enumerate(component_list):
+                idx = serial_start + offset
                 modification_notice = ""
                 if comp_obj.modified:
                     mod_url_clause = ""

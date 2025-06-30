@@ -15,6 +15,7 @@ It handles:
 """
 import sys
 from pathlib import Path
+import yaml
 # Add src directory to Python path to allow importing from the package
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from attribution_generator.generator import AttributionGenerator
@@ -35,16 +36,22 @@ def main():
     """
     # --- Global Configuration ---
     # These values are used in the generated attribution file
-    PROJECT_NAME = "Lockstep"  # Name of your project
-    COPYRIGHT_HOLDER_FULL = "THL A29 Limited, a Tencent company."  # Full legal name
-    COPYRIGHT_HOLDER_SHORT = "Tencent"  # Short name for notices
-    # --- End Global Configuration ---
+    CONFIG_FILE = "project_config.yaml"
+    if not Path(CONFIG_FILE).exists():
+        print(f"❌ Error: Config file '{CONFIG_FILE}' not found.")
+        return 1
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
 
-    # File paths for input/output and configuration
-    INPUT_FILE = "components.xlsx"  # Excel file containing component information
-    OUTPUT_FILE = "ATTRIBUTIONS.txt"  # Generated attribution file
-    LICENSE_CONFIG = "licenses.yaml"  # License text definitions
-    TEMPLATE_CONFIG = "templates.yaml"  # Template definitions for output format
+    PROJECT_NAME = config.get("project_name", "Unknown Project")
+    COPYRIGHT_HOLDER_FULL = config.get("copyright_holder_full", "")
+    COPYRIGHT_HOLDER_SHORT = config.get("copyright_holder_short", "")
+    INPUT_FILE = config.get("input_file", "components.xlsx")
+    OUTPUT_FILE = config.get("output_file", "ATTRIBUTIONS.txt")
+    LICENSE_CONFIG = config.get("license_config", "licenses.yaml")
+    TEMPLATE_CONFIG = config.get("template_config", "templates.yaml")
+    LICENSE_SERIAL_STARTS = config.get("license_serial_starts", {})
+
 
     print("OSS Attribution Generator")
     print("=" * 40)
@@ -53,7 +60,8 @@ def main():
         # Initialize the generator with configuration
         generator = AttributionGenerator(
             LICENSE_CONFIG, TEMPLATE_CONFIG,
-            PROJECT_NAME, COPYRIGHT_HOLDER_FULL, COPYRIGHT_HOLDER_SHORT
+            PROJECT_NAME, COPYRIGHT_HOLDER_FULL, COPYRIGHT_HOLDER_SHORT,
+            license_serial_starts=LICENSE_SERIAL_STARTS
         )
         
         # Check if input file exists
