@@ -196,28 +196,30 @@ class AttributionGenerator:
             grouped[key].append(comp)
         return dict(grouped)
 
+    def _format_optional_field(self, value: str, prefix: str = "\n") -> str:
+        """处理可选字段的格式化，空值不产生换行"""
+        return f"{prefix}{value}" if value else ""
+
+    def _clean_content(self, content: str) -> str:
+        """清理内容中的多余空行"""
+        # 将多个连续空行替换为单个空行
+        lines = [line.rstrip() for line in content.splitlines()]
+        # 去掉开头和结尾的空行
+        while lines and not lines[0]:
+            lines.pop(0)
+        while lines and not lines[-1]:
+            lines.pop()
+        return '\n'.join(lines)
+
     def generate_attribution(self, components: List[Component]) -> str:
         """
-        Generate attribution text for components.
-        
-        Creates a formatted attribution file with:
-        1. Project header
-        2. Components grouped by license
-        3. License texts
-        4. Modification notices
-        5. "Others" URLs
-        6. Project footer
-        
-        Args:
-            components: List of Component objects
-            
-        Returns:
-            Formatted attribution text
+        生成归属文本。
+        处理模板中的多余空行。
         """
-        if not components: return "No components to attribute."
-        grouped_components = self.group_by_license(components)
+        if not components: 
+            return "No components to attribute."
         
-        # Prepare global configuration values for templates
+        grouped_components = self.group_by_license(components)
         global_config_values = {
             "project_name": self.project_name,
             "copyright_holder_full": self.copyright_holder_full,
@@ -225,14 +227,26 @@ class AttributionGenerator:
         }
 
         # Generate header
+        output_parts = []
         header_template_str = self.template_manager.get_template("header")
-        formatted_header = header_template_str.format(**global_config_values)
-        output_parts = [formatted_header, ""]
+        formatted_header = self._clean_content(header_template_str.format(**global_config_values))
+        output_parts.append(formatted_header)
         
         # Process components by license group
         sorted_grouped_items = sorted(grouped_components.items(), key=lambda item: item[0].lower())
 
         for i, (license_expr_key, component_list) in enumerate(sorted_grouped_items):
+            # 添加空行
+            output_parts.append("")
+            output_parts.append("")
+            
+            # 添加 license group header
+            license_header = self.template_manager.get_template("license_group_header").format(
+                license_id=license_expr_key
+            )
+            output_parts.append(self._clean_content(license_header))
+            
+            # 处理每个组件
             serial_start = self.license_serial_starts.get(license_expr_key, 1)
             for offset, comp_obj in enumerate(component_list):
                 idx = serial_start + offset
@@ -256,46 +270,42 @@ class AttributionGenerator:
 
                 version_display = ""
                 if comp_obj.version and str(comp_obj.version).strip():
-                    version_display = self.template_manager.get_template("version_display").format(version=comp_obj.version)
-                output_parts.append(self.template_manager.get_template("component_listing").format(
+                    version_display = self.template_manager.get_template("version_display").format(
+                        version=comp_obj.version
+                    )
+                
+                # 使用工具方法处理可选字段的换行
+                component_text = self.template_manager.get_template("component_listing").format(
                     serial_number=idx,
                     name=comp_obj.name,
                     version=comp_obj.version or "",
                     version_display=version_display,
                     copyright=comp_obj.copyright,
-                    modification_notice=modification_notice,
-                    repository_statement=repository_statement
-                ))
-                
-                # Track components with "others" URLs
-                if comp_obj.others_url:
-                    components_with_others_urls_in_group.append({
-                        "name": comp_obj.name, "url": comp_obj.others_url, "serial_number": idx
-                    })
-
-            # Add license text
-            output_parts.append("")
+                    modification_notice_with_newline=self._format_optional_field(modification_notice),
+                    repository_statement_with_newline=self._format_optional_field(repository_statement)
+                )
+                output_parts.append(self._clean_content(component_text))
+        
+            # 添加 license text
             combined_license_text = self.license_manager.get_license_text(license_expr_key)
-            output_parts.append(self.template_manager.get_template("license_group_footer").format(
-                license_id=license_expr_key, license_text=combined_license_text
-            ))
+            license_footer = self.template_manager.get_template("license_group_footer").format(
+                license_id=license_expr_key,
+                license_text=combined_license_text
+            )
+            output_parts.append(self._clean_content(license_footer))
 
-            # Add "others" URLs section if applicable
-            if "others" in license_expr_key.lower() and components_with_others_urls_in_group:
-                output_parts.append(self.template_manager.get_template("others_url_section_header"))
-                for item_data in components_with_others_urls_in_group:
-                    output_parts.append(self.template_manager.get_template("others_url_item").format(
-                        component_serial_number=item_data["serial_number"],
-                        component_name=item_data["name"], 
-                        others_url=item_data["url"]
-                    ))
-                output_parts.append("")
+            # 只在不是最后一组时添加固定数量的空行
+            if i < len(sorted_grouped_items) - 1:
+                output_parts.extend(["", "", ""])
 
         # Generate footer
+        output_parts.append("")
         footer_template_str = self.template_manager.get_template("footer")
-        formatted_footer = footer_template_str.format(**global_config_values)
-        output_parts.extend(["", formatted_footer, ""])
-        return "\n".join(output_parts)
+        formatted_footer = self._clean_content(footer_template_str.format(**global_config_values))
+        output_parts.append(formatted_footer)
+        
+        # 最后整体清理一次
+        return self._clean_content("\n".join(output_parts))
 
     def generate_from_file(self, input_file: str, output_file: str = "ATTRIBUTIONS.txt"):
         """

@@ -56,7 +56,8 @@ class LicenseManager:
                 if not isinstance(loaded_licenses, dict):
                     print(f"⚠️ Warning: License configuration file '{self.license_config_path}' is not a valid dictionary. Licenses may not load correctly.")
                     return {}
-                return loaded_licenses
+                # 关键：全部转小写
+                return {str(k).lower(): v for k, v in loaded_licenses.items()}
         except Exception as e:
             print(f"⚠️ Error loading license configuration file '{self.license_config_path}': {e}. No license texts will be available.")
             return {}
@@ -78,13 +79,13 @@ class LicenseManager:
         text = ""
         if lic_id.lower() == "others":
             text = self.licenses.get(
-                "OTHERS_DEFINITION",
+                "others_definition",  # 这里也要小写
                 "[This component is subject to additional terms or conditions, often specified by the copyright holder or in accompanying notices. These 'other' terms should be detailed here, in a referenced document, or by defining 'OTHERS_DEFINITION' in your licenses.yaml. Specific URLs may be listed with components below.]"
             )
             header = f"Regarding '{lic_id}' conditions:"
         else:
             text = self.licenses.get(
-                lic_id,
+                lic_id.lower(),  # 查找时小写
                 f"ERROR: License text for '{lic_id}' not found in '{self.license_config_path}'. Please add the full text for this license."
             )
         return header, text
