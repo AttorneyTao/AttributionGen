@@ -32,7 +32,8 @@ class AttributionGenerator:
 
     def __init__(self, license_config: str, template_config: str, 
                  project_name: str, copyright_holder_full: str, copyright_holder_short: str,
-                 license_serial_starts: dict = None):
+                 license_serial_starts: dict = None,
+                 component_spacing: int = 1):  # 空行数量
         """
         Initialize the attribution generator.
         
@@ -49,6 +50,7 @@ class AttributionGenerator:
         self.copyright_holder_full = copyright_holder_full
         self.copyright_holder_short = copyright_holder_short
         self.license_serial_starts = license_serial_starts or {}
+        self.component_spacing = component_spacing  # 新增
 
     def _clean_excel_string(self, text: any) -> str:
         """
@@ -285,6 +287,9 @@ class AttributionGenerator:
                     repository_statement_with_newline=self._format_optional_field(repository_statement)
                 )
                 output_parts.append(self._clean_content(component_text))
+                # 在条目之间插入空行（最后一个条目后不加）
+                if offset < len(component_list) - 1:
+                    output_parts.extend([""] * self.component_spacing)
         
             # 添加 license text
             combined_license_text = self.license_manager.get_license_text(license_expr_key)

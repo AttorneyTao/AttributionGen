@@ -8,3 +8,4 @@ template_config: templates.yaml
 license_serial_starts:
   MIT: 1
   BSD-3-Clause: 1
+component_spacing: 1   

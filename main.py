@@ -51,6 +51,7 @@ def main():
     LICENSE_CONFIG = config.get("license_config", "licenses.yaml")
     TEMPLATE_CONFIG = config.get("template_config", "templates.yaml")
     LICENSE_SERIAL_STARTS = config.get("license_serial_starts", {})
+    COMPONENT_SPACING = config.get("component_spacing", 1)
 
 
     print("OSS Attribution Generator")
@@ -61,7 +62,8 @@ def main():
         generator = AttributionGenerator(
             LICENSE_CONFIG, TEMPLATE_CONFIG,
             PROJECT_NAME, COPYRIGHT_HOLDER_FULL, COPYRIGHT_HOLDER_SHORT,
-            license_serial_starts=LICENSE_SERIAL_STARTS
+            license_serial_starts=LICENSE_SERIAL_STARTS,
+            component_spacing=COMPONENT_SPACING
         )
         
         # Check if input file exists
