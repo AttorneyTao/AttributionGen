@@ -30,6 +30,7 @@ class Component:
         others_url: URL for additional notices (optional)
         modified: Whether the component is modified (default: False)
         modified_url: URL to modified code (optional)
+        repository: Repository URL (optional)
     """
     
     name: str

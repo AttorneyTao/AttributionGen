@@ -33,7 +33,8 @@ class AttributionGenerator:
     def __init__(self, license_config: str, template_config: str, 
                  project_name: str, copyright_holder_full: str, copyright_holder_short: str,
                  license_serial_starts: dict = None,
-                 component_spacing: int = 1):  # 空行数量
+                 component_spacing: int = 1,  # 空行数量
+                 show_source_url: bool = False):  # 全局控制是否显示源代码链接
         """
         Initialize the attribution generator.
         
@@ -43,6 +44,9 @@ class AttributionGenerator:
             project_name: Name of the project
             copyright_holder_full: Full legal name of copyright holder
             copyright_holder_short: Short name for copyright notices
+            license_serial_starts: Dictionary for license serial start numbers
+            component_spacing: Number of blank lines between components
+            show_source_url: Global setting to control whether to show source URLs
         """
         self.license_manager = LicenseManager(license_config)
         self.template_manager = TemplateManager(template_config)
@@ -50,7 +54,8 @@ class AttributionGenerator:
         self.copyright_holder_full = copyright_holder_full
         self.copyright_holder_short = copyright_holder_short
         self.license_serial_starts = license_serial_starts or {}
-        self.component_spacing = component_spacing  # 新增
+        self.component_spacing = component_spacing  # 空行数量
+        self.show_source_url = show_source_url  # 全局源代码链接显示控制
 
     def _clean_excel_string(self, text: any) -> str:
         """
@@ -95,14 +100,14 @@ class AttributionGenerator:
                 mapping[component_fields[col_lower]] = col_name_str
             elif col_lower in ['repo', 'source_url'] and 'repository' in component_fields:
                 mapping['repository'] = col_name_str
-            elif col_lower in ['notice_url'] and 'others_url' in component_fields:
+            elif col_lower in ['notice_url', 'other_url', 'third_party_url'] and 'others_url' in component_fields:
                 mapping['others_url'] = col_name_str
             # 可继续扩展别名
         return mapping
 
     def _row_to_component_kwargs(self, row, column_mapping, component_fields):
         """
-        将一行数据（dict或Series）转换为Component的参数字典。
+        �将一行数据（dict或Series）转换为Component的参数字典。
         """
         kwargs = {}
         for field in component_fields:
@@ -213,6 +218,92 @@ class AttributionGenerator:
             lines.pop()
         return '\n'.join(lines)
 
+    def _resolve_others_url(self, others_url: str, repository: str) -> str:
+        """
+        解析 others_url，如果是相对路径则与 repository 拼接
+        
+        Args:
+            others_url: 原始的 others_url（可能是相对路径）
+            repository: 组件的 repository URL
+            
+        Returns:
+            完整的 URL
+        """
+        if not others_url:
+            return ""
+            
+        # 如果 others_url 已经是完整 URL，直接返回
+        if others_url.startswith(('http://', 'https://')):
+            return others_url
+            
+        # 如果没有 repository，无法拼接
+        if not repository:
+            return others_url
+            
+        # 处理 GitHub URL，截取到根目录
+        base_url = self._extract_github_base_url(repository)
+        if not base_url:
+            return others_url
+            
+        # 拼接相对路径
+        return f"{base_url}/{others_url.lstrip('/')}"
+    
+    def _extract_github_base_url(self, repository_url: str) -> str:
+        """
+        从 GitHub repository URL 中提取基础 URL（到 tag/branch 的根目录）
+        
+        例如：
+        https://github.com/gabime/spdlog/blob/v1.x/LICENSE 
+        -> https://github.com/gabime/spdlog/tree/v1.x
+        
+        Args:
+            repository_url: GitHub repository URL
+            
+        Returns:
+            基础 URL，如果不是有效的 GitHub URL 返回空字符串
+        """
+        if not repository_url or not repository_url.startswith('https://github.com/'):
+            return ""
+            
+        # 移除末尾的斜杠
+        url = repository_url.rstrip('/')
+        
+        # 分割URL路径
+        parts = url.split('/')
+        
+        # GitHub URL 格式: https://github.com/owner/repo/blob|tree/branch/path...
+        # 我们需要: https://github.com/owner/repo/tree/branch
+        if len(parts) >= 6 and parts[5] in ['blob', 'tree']:
+            # 有 blob/tree 路径
+            if len(parts) >= 7:
+                # 有分支/tag信息
+                base_parts = parts[:7]  # owner/repo/blob|tree/branch
+                base_parts[5] = 'tree'  # 统一使用 tree
+                return '/'.join(base_parts)
+            else:
+                # 只有 blob/tree，没有分支信息，默认使用 main
+                return f"{'/'.join(parts[:5])}/tree/main"
+        elif len(parts) >= 5:
+            # 没有 blob/tree 路径，直接是 repo 根目录
+            return f"{'/'.join(parts[:5])}/tree/main"
+        else:
+            # URL 格式不符合预期
+            return ""
+
+    def _has_others_in_license(self, license_expression: str) -> bool:
+        """
+        检查 license expression 是否包含 'and others'
+        
+        Args:
+            license_expression: SPDX license expression
+            
+        Returns:
+            如果包含 'others' 返回 True
+        """
+        if not license_expression:
+            return False
+        return 'others' in license_expression.lower()
+
     def generate_attribution(self, components: List[Component]) -> str:
         """
         生成归属文本。
@@ -250,6 +341,8 @@ class AttributionGenerator:
             
             # 处理每个组件
             serial_start = self.license_serial_starts.get(license_expr_key, 1)
+            components_with_others_urls_in_group = []
+            
             for offset, comp_obj in enumerate(component_list):
                 idx = serial_start + offset
                 modification_notice = ""
@@ -265,10 +358,26 @@ class AttributionGenerator:
                     )
 
                 repository_statement = ""
-                if getattr(comp_obj, "repository", None):
+                if getattr(comp_obj, "repository", None) and self.show_source_url:
                     repository_statement = self.template_manager.get_template("repository_statement").format(
                         repository=comp_obj.repository
                     )
+
+                # 新增处理 repository_statement_with_newline
+                repository_statement_with_newline = ""
+                if getattr(comp_obj, "repository", None) and self.show_source_url:
+                    repository_statement_with_newline = self.template_manager.get_template("repository_statement_with_newline").format(
+                        repository=comp_obj.repository
+                    )
+
+                # 处理 others URL（仅当许可证表达式包含 'others' 且有 others_url 时）
+                others_url_statement = ""
+                if self._has_others_in_license(license_expr_key) and getattr(comp_obj, "others_url", None):
+                    resolved_url = self._resolve_others_url(comp_obj.others_url, getattr(comp_obj, "repository", None))
+                    if resolved_url:
+                        others_url_statement = self.template_manager.get_template("others_license_notice").format(
+                            url=resolved_url
+                        )
 
                 version_display = ""
                 if comp_obj.version and str(comp_obj.version).strip():
@@ -276,15 +385,24 @@ class AttributionGenerator:
                         version=comp_obj.version
                     )
                 
+                # 组合所有可选字段
+                optional_statements = []
+                if modification_notice:
+                    optional_statements.append(modification_notice)
+                if others_url_statement:
+                    optional_statements.append(others_url_statement)
+                
+                combined_optional = self._format_optional_field("\n".join(optional_statements))
+                
                 # 使用工具方法处理可选字段的换行
                 component_text = self.template_manager.get_template("component_listing").format(
                     serial_number=idx,
                     name=comp_obj.name,
                     version=comp_obj.version or "",
                     version_display=version_display,
-                    copyright=comp_obj.copyright,
-                    modification_notice_with_newline=self._format_optional_field(modification_notice),
-                    repository_statement_with_newline=self._format_optional_field(repository_statement)
+                    copyright=comp_obj.copyright or "",
+                    modification_notice_with_newline=combined_optional,
+                    repository_statement_with_newline=repository_statement_with_newline  # 使用新处理的字段
                 )
                 output_parts.append(self._clean_content(component_text))
                 # 在条目之间插入空行（最后一个条目后不加）
@@ -292,11 +410,21 @@ class AttributionGenerator:
                     output_parts.extend([""] * self.component_spacing)
         
             # 添加 license text
-            combined_license_text = self.license_manager.get_license_text(license_expr_key)
-            license_footer = self.template_manager.get_template("license_group_footer").format(
-                license_id=license_expr_key,
-                license_text=combined_license_text
-            )
+            # 始终不显示"For license:"标记，只保留"Terms of the {license_id}:"
+            combined_license_text = self.license_manager.get_license_text(license_expr_key, include_license_headers=False)
+            
+            if len(sorted_grouped_items) == 1:
+                # 单许可证情况使用单许可证模板
+                license_footer = self.template_manager.get_template("single_license_footer").format(
+                    license_id=license_expr_key,
+                    license_text=combined_license_text
+                )
+            else:
+                # 多许可证情况也使用带标题但无"For license:"的模板
+                license_footer = self.template_manager.get_template("license_group_footer").format(
+                    license_id=license_expr_key,
+                    license_text=combined_license_text
+                )
             output_parts.append(self._clean_content(license_footer))
 
             # 只在不是最后一组时添加固定数量的空行

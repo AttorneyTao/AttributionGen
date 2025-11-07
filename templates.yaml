@@ -38,18 +38,39 @@ license_group_footer: |
   Terms of the {license_id}:
   --------------------------------------------------------------------
   {license_text}
+
+# Template for single license (no redundant "For license:" marker)
+single_license_footer: |
+  Terms of the {license_id}:
+  --------------------------------------------------------------------
+  {license_text}
 others_url_section_header: |
 
   Additional 'Others' Notices/URLs for components in this group:
   --------------------------------------------------------------------
 others_url_item: "  {component_serial_number}. {component_name}: {others_url}"
-modification_notice: "This software was modified by {copyright_holder_short}{modified_url_clause}"
+modification_notice: "Please note this software has been modified by  {copyright_holder_short} in this distribution.{modified_url_clause}"
 
 modification_url_clause: ", you may find the modified code at {modified_url}"
 
 version_display: "@{version}"
 
-repository_statement: "You may obtain the source code and detailed information about this component at {repository}"
+repository_statement: "You may obtain the source code and original Copyright Notice about this component at {repository}"
+
+repository_statement_with_newline: "\nYou may find the original code here: {repository}"
+
+others_license_notice: "For the license of other third party components bundled with this software, please refer to the following URL: {url}"
+
+# Template for license with exception handling  
+license_with_exception_intro: |
+  This component is licensed under {main_license} with the following exception(s): {exception_list}.
+  You should observe the main license terms with the noted exceptions below:
+
+exception_clause_header: |
+
+  With the following exception(s):
+  --------------------------------------------------------------------
+
 footer: |
 
   ==================================================

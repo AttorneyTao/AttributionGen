@@ -14,6 +14,70 @@ from typing import Dict, Set, Tuple
 import re
 
 class LicenseManager:
+    class ExprNode:
+        def __init__(self, kind, value=None, left=None, right=None, exception=None):
+            self.kind = kind  # 'LEAF', 'WITH', 'AND', 'OR'
+            self.value = value  # license id for LEAF, None for AND/OR
+            self.left = left
+            self.right = right
+            self.exception = exception  # for WITH
+
+    def _parse_expr(self, expr: str) -> 'ExprNode':
+        """
+        递归解析表达式，支持括号、AND、OR、WITH。
+        返回表达式树根节点。
+        """
+        expr = expr.strip()
+        # 括号优先
+        if expr.startswith('(') and expr.endswith(')'):
+            # 去除最外层括号
+            inner = expr[1:-1].strip()
+            # 检查括号是否配对
+            depth = 0
+            for i, c in enumerate(expr):
+                if c == '(': depth += 1
+                if c == ')': depth -= 1
+                if depth == 0 and i != len(expr)-1:
+                    break
+            else:
+                # 完全包裹，递归
+                return self._parse_expr(inner)
+        # 先分割顶层AND/OR
+        def split_top(expr, op):
+            depth = 0
+            i = 0
+            last = 0
+            res = []
+            expr_len = len(expr)
+            op_len = len(op)
+            while i < expr_len:
+                if expr[i] == '(': depth += 1
+                elif expr[i] == ')': depth -= 1
+                elif depth == 0 and expr[i:i+op_len].upper() == op:
+                    res.append(expr[last:i].strip())
+                    last = i+op_len
+                    i += op_len-1
+                i += 1
+            if last < expr_len:
+                res.append(expr[last:].strip())
+            return res if len(res) > 1 else None
+        # 先OR再AND（SPDX优先级一致，左结合）
+        for op in [' OR ', ' AND ']:
+            parts = split_top(expr, op)
+            if parts:
+                nodes = [self._parse_expr(p) for p in parts]
+                node = nodes[0]
+                for n in nodes[1:]:
+                    node = self.ExprNode(op.strip(), left=node, right=n)
+                return node
+        # 处理WITH
+        m = re.match(r'^(.*?)(?:\s+WITH\s+)(.+)$', expr, flags=re.IGNORECASE)
+        if m:
+            main = m.group(1).strip()
+            exc = m.group(2).strip()
+            return self.ExprNode('WITH', left=self._parse_expr(main), exception=exc)
+        # 叶子节点
+        return self.ExprNode('LEAF', value=expr)
     """
     Manages license text storage and retrieval.
     
@@ -33,6 +97,7 @@ class LicenseManager:
         """
         self.license_config_path = Path(license_config_path)
         self.licenses = self._load_licenses()
+        self.missing_licenses = set()
 
     def _load_licenses(self) -> Dict[str, str]:
         """
@@ -62,7 +127,7 @@ class LicenseManager:
             print(f"⚠️ Error loading license configuration file '{self.license_config_path}': {e}. No license texts will be available.")
             return {}
 
-    def _get_individual_license_text(self, lic_id: str) -> Tuple[str, str]:
+    def _get_individual_license_text(self, lic_id: str, include_header: bool = True) -> Tuple[str, str]:
         """
         Get text for a single license.
         
@@ -71,11 +136,15 @@ class LicenseManager:
         
         Args:
             lic_id: License identifier
+            include_header: Whether to include "For license:" header
             
         Returns:
             Tuple of (header, text)
         """
-        header = f"For license: {lic_id}"
+        if include_header:
+            header = f"For license: {lic_id}"
+        else:
+            header = ""
         text = ""
         if lic_id.lower() == "others":
             text = self.licenses.get(
@@ -84,21 +153,24 @@ class LicenseManager:
             )
             header = f"Regarding '{lic_id}' conditions:"
         else:
-            text = self.licenses.get(
-                lic_id.lower(),  # 查找时小写
-                f"ERROR: License text for '{lic_id}' not found in '{self.license_config_path}'. Please add the full text for this license."
-            )
+            if lic_id.lower() in self.licenses:
+                text = self.licenses[lic_id.lower()]
+            else:
+                text = f"ERROR: License text for '{lic_id}' not found in '{self.license_config_path}'. Please add the full text for this license."
+                self.missing_licenses.add(lic_id)
         return header, text
 
-    def get_license_text(self, license_expression: str) -> str:
+    def get_license_text(self, license_expression: str, include_license_headers: bool = True) -> str:
         """
         Get combined license text for a license expression.
         
         Processes complex license expressions (e.g., "MIT AND Apache-2.0")
         and combines the appropriate license texts with explanatory headers.
+        Special handling for "with" syntax for license exceptions.
         
         Args:
             license_expression: License expression to process
+            include_license_headers: Whether to include "For license:" headers
             
         Returns:
             Combined license text with appropriate headers and formatting
@@ -106,65 +178,41 @@ class LicenseManager:
         if not license_expression or not license_expression.strip():
             return "License information not provided for this component."
 
-        # Extract individual license IDs
-        extracted_ids: Set[str] = set()
-        is_predominantly_and = False
-        is_predominantly_or = False
-        is_mixed_for_intro = False
+        # Check if this is a "with" exception case
+        has_with_exception = " with " in license_expression.lower()
         
-        # Analyze license expression structure
-        temp_expr_upper = license_expression.upper()
-        temp_expr_no_paren = re.sub(r'\([^)]*\)', '', temp_expr_upper)
-        has_top_level_and = " AND " in temp_expr_no_paren
-        has_top_level_or = " OR " in temp_expr_no_paren
-
-        # Determine expression type for appropriate introduction
-        if has_top_level_and and has_top_level_or:
-            is_mixed_for_intro = True
-        elif has_top_level_and:
-            is_predominantly_and = True
-        elif has_top_level_or:
-            is_predominantly_or = True
-
         # Extract individual license IDs
-        cleaned_expression_for_ids = license_expression.replace('(', ' ').replace(')', ' ').replace(';', ' ')
-        id_candidates = re.split(r'\s+(?:AND|OR)\s+|\s*[,;]\s*', cleaned_expression_for_ids, flags=re.IGNORECASE)
 
-        for part in id_candidates:
-            part = part.strip()
-            if part and part.upper() not in ["AND", "OR"]:
-                extracted_ids.add(part)
-        
-        if not extracted_ids and license_expression.strip():
-             extracted_ids.add(license_expression.strip())
+        # 新实现：支持混合AND/OR/WITH表达式
+        # 新实现：递归遍历表达式树生成归属文本
+        def render(node, intro=True):
+            if node is None:
+                return ""
+            if node.kind == 'LEAF':
+                header, text = self._get_individual_license_text(node.value, include_license_headers)
+                if not text.strip():  # Skip if the text is empty or None
+                    return ""
+                if header:
+                    return f"{header}\n{'-'*len(header)}\n{text}"
+                else:
+                    return text
+            elif node.kind == 'WITH':
+                main_text = render(node.left, intro=False)
+                exc_header, exc_text = self._get_individual_license_text(node.exception, True)
+                return f"{main_text}\n\n--------------------\nWith the following exception(s):\n--------------------\n\nException: {exc_header}\n{'-'*(len(exc_header)+11)}\n{exc_text}"
+            elif node.kind == 'AND' or node.kind == 'OR':
+                op = node.kind
+                left = render(node.left, intro=False)
+                right = render(node.right, intro=False)
+                op_str = "And also" if op == 'AND' else "Or"
+                return f"{left}\n\n--------------------\n{op_str}:\n--------------------\n\n{right}"
+            else:
+                return ""
 
-        # Generate appropriate introduction based on expression type
+        # intro phrase
         intro_phrase = ""
-        if len(extracted_ids) > 1: 
-            if is_mixed_for_intro:
-                intro_phrase = f"This component is subject to a combination of license terms ({license_expression}). You should review all applicable terms carefully:\n\n"
-            elif is_predominantly_and:
-                intro_phrase = f"This component is licensed under multiple terms ({license_expression}), and you should observe all of them:\n\n"
-            elif is_predominantly_or:
-                intro_phrase = f"This component is licensed under one of the following terms ({license_expression}), at your option (unless specified otherwise by the component's documentation):\n\n"
-        
-        # Build final text
-        final_text_segments = [intro_phrase]
-        
-        if not extracted_ids:
-             lic_id_to_fetch = license_expression.strip()
-             if lic_id_to_fetch:
-                header, text = self._get_individual_license_text(lic_id_to_fetch)
-                final_text_segments.append(f"{header}\n{'-'*len(header)}\n{text}")
-             else:
-                return "License information was empty or invalid."
-        else:
-            # Add each license text with appropriate separators
-            for i, lic_id in enumerate(sorted(list(extracted_ids))): 
-                if i > 0 and intro_phrase: 
-                    final_text_segments.append("\n\n--------------------\nAnd also:\n--------------------\n\n")
-                elif i > 0 : 
-                    final_text_segments.append("\n\n--------------------\n\n")
-                header, text = self._get_individual_license_text(lic_id)
-                final_text_segments.append(f"{header}\n{'-'*len(header)}\n{text}")
-        return "".join(final_text_segments)
+        if '(' in license_expression or ')' in license_expression:
+            intro_phrase = f"This component is subject to a complex license expression ({license_expression}). Please review all applicable terms carefully:\n\n"
+        # else可根据需要保留原有intro逻辑
+        expr_tree = self._parse_expr(license_expression)
+        return intro_phrase + render(expr_tree)

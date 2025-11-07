@@ -16,6 +16,7 @@ It handles:
 import sys
 from pathlib import Path
 import yaml
+import datetime
 # Add src directory to Python path to allow importing from the package
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from attribution_generator.generator import AttributionGenerator
@@ -30,6 +31,9 @@ def main():
     3. Loads components from input file
     4. Generates attribution file
     5. Handles errors and provides user feedback
+    
+    Command line usage:
+        python main.py [input_file] [output_file]
     
     Returns:
         int: 0 for success, 1 for failure
@@ -46,12 +50,26 @@ def main():
     PROJECT_NAME = config.get("project_name", "Unknown Project")
     COPYRIGHT_HOLDER_FULL = config.get("copyright_holder_full", "")
     COPYRIGHT_HOLDER_SHORT = config.get("copyright_holder_short", "")
-    INPUT_FILE = config.get("input_file", "components.xlsx")
-    OUTPUT_FILE = config.get("output_file", "ATTRIBUTIONS.txt")
+    
+    # Handle command line arguments or use config defaults
+    if len(sys.argv) >= 2:
+        INPUT_FILE = sys.argv[1]
+    else:
+        INPUT_FILE = config.get("input_file", "components.xlsx")
+        
+    # 生成带时间戳的输出文件名
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    OUTPUT_DIR = "outputs"
+    OUTPUT_FILE = f"{OUTPUT_DIR}/ATTRIBUTIONS{timestamp}.txt"
+    
+    # 确保输出目录存在
+    Path(OUTPUT_DIR).mkdir(exist_ok=True)
+    
     LICENSE_CONFIG = config.get("license_config", "licenses.yaml")
     TEMPLATE_CONFIG = config.get("template_config", "templates.yaml")
     LICENSE_SERIAL_STARTS = config.get("license_serial_starts", {})
     COMPONENT_SPACING = config.get("component_spacing", 1)
+    SHOW_SOURCE_URL = config.get("show_source_url", False)
 
 
     print("OSS Attribution Generator")
@@ -63,7 +81,8 @@ def main():
             LICENSE_CONFIG, TEMPLATE_CONFIG,
             PROJECT_NAME, COPYRIGHT_HOLDER_FULL, COPYRIGHT_HOLDER_SHORT,
             license_serial_starts=LICENSE_SERIAL_STARTS,
-            component_spacing=COMPONENT_SPACING
+            component_spacing=COMPONENT_SPACING,
+            show_source_url=SHOW_SOURCE_URL
         )
         
         # Check if input file exists
@@ -93,6 +112,13 @@ def main():
         print(f"\n🔨 Generating attribution file to: {OUTPUT_FILE}")
         generator.generate_from_file(input_file=INPUT_FILE, output_file=OUTPUT_FILE)
         print(f"✅ Attribution file generated: {Path(OUTPUT_FILE).resolve()}")
+        # 输出未找到的license
+        missing = set(generator.license_manager.missing_licenses)
+        if missing:
+            print("\n⚠️ The following license(s) were referenced but not found in licenses.yaml:")
+            for lic in sorted(missing):
+                print(f"  - {lic}")
+            print("请补充完整这些license的文本到licenses.yaml后再生成归属文件。\n")
         print("\n🎉 Done!")
         
     except FileNotFoundError as e: 

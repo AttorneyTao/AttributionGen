@@ -8,4 +8,5 @@ template_config: templates.yaml
 license_serial_starts:
   MIT: 1
   BSD-3-Clause: 1
-component_spacing: 1   
+component_spacing: 1
+show_source_url: true  # Global setting to control whether to show source code URLs   

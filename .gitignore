@@ -5,10 +5,15 @@ build/
 dist/
 wheels/
 *.egg-info
-
+*.yaml
 # Virtual environments
 .venv
 bak/
 
-ATTRIBUTIONS.txt
+# Input and output directories
+/inputs/
+/outputs/
 
+# Generated attribution files
+ATTRIBUTIONS.txt
+ATTRIBUTIONS*.txt
