@@ -70,7 +70,7 @@ class AttributionGenerator:
             Cleaned string
         """
         if not isinstance(text, str): text = str(text)
-        return text.replace('_x000d_', '').replace('_x000D_', '').strip()
+        return text.replace('_x000d_', '').replace('_x000D_', '').replace('\xa0', ' ').strip()
 
     def _str_to_bool(self, s: any) -> bool:
         """
