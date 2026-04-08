@@ -17,3 +17,4 @@ bak/
 # Generated attribution files
 ATTRIBUTIONS.txt
 ATTRIBUTIONS*.txt
+*.xlsx
