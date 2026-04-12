@@ -5,6 +5,7 @@ input_file: components.xlsx
 output_file: ATTRIBUTIONS.txt
 license_config: licenses.yaml
 template_config: templates.yaml
+alias_config: license_aliases.yaml
 license_serial_starts:
   MIT: 1
   BSD-3-Clause: 1

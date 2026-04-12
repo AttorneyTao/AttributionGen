@@ -30,11 +30,12 @@ class AttributionGenerator:
     4. Managing component modifications
     """
 
-    def __init__(self, license_config: str, template_config: str, 
+    def __init__(self, license_config: str, template_config: str,
                  project_name: str, copyright_holder_full: str, copyright_holder_short: str,
                  license_serial_starts: dict = None,
-                 component_spacing: int = 1,  # 空行数量
-                 show_source_url: bool = False):  # 全局控制是否显示源代码链接
+                 component_spacing: int = 1,
+                 show_source_url: bool = False,
+                 alias_config: str = "license_aliases.yaml"):
         """
         Initialize the attribution generator.
         
@@ -48,7 +49,7 @@ class AttributionGenerator:
             component_spacing: Number of blank lines between components
             show_source_url: Global setting to control whether to show source URLs
         """
-        self.license_manager = LicenseManager(license_config)
+        self.license_manager = LicenseManager(license_config, alias_config)
         self.template_manager = TemplateManager(template_config)
         self.project_name = project_name
         self.copyright_holder_full = copyright_holder_full
@@ -203,6 +204,41 @@ class AttributionGenerator:
             grouped[key].append(comp)
         return dict(grouped)
 
+    def deduplicate_components(self, components: List[Component]) -> List[Component]:
+        """
+        Remove exact-duplicate components where every field is identical.
+
+        Uses dataclass equality (auto-generated __eq__ compares all fields).
+        Prints debug information about any duplicates found.
+
+        Returns:
+            De-duplicated list preserving original order of first occurrences.
+        """
+        seen_keys: dict = {}   # tuple-of-field-values -> count
+        result: List[Component] = []
+
+        for comp in components:
+            key = tuple(getattr(comp, f.name) for f in fields(comp))
+            if key in seen_keys:
+                seen_keys[key] += 1
+            else:
+                seen_keys[key] = 1
+                result.append(comp)
+
+        duplicates_total = len(components) - len(result)
+        if duplicates_total:
+            print(f"\n🗑️  [去重] 发现 {duplicates_total} 个重复条目，已移除:")
+            for comp, key in zip(components, [tuple(getattr(c, f.name) for f in fields(c)) for c in components]):
+                count = seen_keys.get(key, 1)
+                if count > 1:
+                    version_str = f" v{comp.version}" if comp.version else ""
+                    print(f"    - {comp.name}{version_str} [{comp.license}]  (共出现 {count} 次，保留第一条)")
+                    seen_keys[key] = 1  # mark as already reported
+        else:
+            print(f"\n✅ [去重] 未发现重复条目（共 {len(result)} 个组件）")
+
+        return result
+
     def _format_optional_field(self, value: str, prefix: str = "\n") -> str:
         """处理可选字段的格式化，空值不产生换行"""
         return f"{prefix}{value}" if value else ""
@@ -326,21 +362,31 @@ class AttributionGenerator:
         output_parts.append(formatted_header)
         
         # Process components by license group
-        sorted_grouped_items = sorted(grouped_components.items(), key=lambda item: item[0].lower())
+        sorted_grouped_items = sorted(grouped_components.items(), key=lambda x: x[0].lower())
 
         for i, (license_expr_key, component_list) in enumerate(sorted_grouped_items):
+            # Normalise expression for display (replaces informal names with canonical
+            # SPDX identifiers, e.g. "gpl-2.0 and others" → "GPL-2.0-only AND others")
+            display_expr = self.license_manager.normalize_expression(license_expr_key)
+            if display_expr != license_expr_key:
+                print(f"🔄 [标准化] '{license_expr_key}'  →  '{display_expr}'")
+
             # 添加空行
             output_parts.append("")
             output_parts.append("")
-            
+
             # 添加 license group header
             license_header = self.template_manager.get_template("license_group_header").format(
-                license_id=license_expr_key
+                license_id=display_expr
             )
             output_parts.append(self._clean_content(license_header))
-            
+
             # 处理每个组件
-            serial_start = self.license_serial_starts.get(license_expr_key, 1)
+            # serial_starts config may be keyed by either the display or original expression
+            serial_start = self.license_serial_starts.get(
+                display_expr,
+                self.license_serial_starts.get(license_expr_key, 1)
+            )
             components_with_others_urls_in_group = []
             
             for offset, comp_obj in enumerate(component_list):
@@ -412,17 +458,15 @@ class AttributionGenerator:
             # 添加 license text
             # 始终不显示"For license:"标记，只保留"Terms of the {license_id}:"
             combined_license_text = self.license_manager.get_license_text(license_expr_key, include_license_headers=False)
-            
+
             if len(sorted_grouped_items) == 1:
-                # 单许可证情况使用单许可证模板
                 license_footer = self.template_manager.get_template("single_license_footer").format(
-                    license_id=license_expr_key,
+                    license_id=display_expr,
                     license_text=combined_license_text
                 )
             else:
-                # 多许可证情况也使用带标题但无"For license:"的模板
                 license_footer = self.template_manager.get_template("license_group_footer").format(
-                    license_id=license_expr_key,
+                    license_id=display_expr,
                     license_text=combined_license_text
                 )
             output_parts.append(self._clean_content(license_footer))

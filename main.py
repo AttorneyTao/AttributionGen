@@ -21,6 +21,103 @@ import datetime
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from attribution_generator.generator import AttributionGenerator
 
+
+def _prompt_license_text(lm, lic_id: str) -> bool:
+    """
+    Interactively prompt the user to paste the full text for a license.
+    The text is appended to licenses.yaml via lm.add_license_text().
+
+    If the user enters nothing (empty input), a clearly-marked placeholder is
+    stored so generation can proceed, but a warning is printed.
+
+    Returns:
+        True if real text was provided; False if only a placeholder was saved.
+    """
+    print(f"   请粘贴 '{lic_id}' 的完整许可证文本")
+    print(f"   (在单独一行输入一个英文句点 '.' 并回车，表示输入结束):")
+    lines = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line == '.':
+            break
+        lines.append(line)
+
+    if lines:
+        lm.add_license_text(lic_id, '\n'.join(lines))
+        print(f"   ✅ 已将 '{lic_id}' 的许可证文本追加到 licenses.yaml")
+        return True
+    else:
+        placeholder = f"[LICENSE TEXT FOR '{lic_id}' NOT PROVIDED — please add manually to licenses.yaml]"
+        lm.add_license_text(lic_id, placeholder)
+        print(f"   ⚠️  未输入文本，已写入占位符，请事后手动补充到 licenses.yaml")
+        return False
+
+
+def preflight_check(generator: AttributionGenerator, component_list: list) -> None:
+    """
+    Pre-flight check: interactively resolve all unknown license identifiers
+    before generating the attribution file.
+
+    For each unique leaf license ID across all components (including the special
+    UNSPECIFIED_LICENSE key used for components with no license field):
+      1. If it resolves directly (via licenses.yaml or alias table) → OK, skip.
+      2. If not found → ask the user which SPDX identifier it corresponds to.
+         Pressing Enter skips the alias step and uses the original identifier.
+      3. If the resolved identifier still has no text in licenses.yaml → the user
+         MUST paste the license text; an empty entry writes a placeholder instead
+         of silently skipping.
+    """
+    lm = generator.license_manager
+
+    # Collect all unique leaf IDs, including UNSPECIFIED_LICENSE for empty fields
+    all_leaf_ids: set = set()
+    for comp in component_list:
+        if comp.license and comp.license.strip():
+            for leaf in lm.get_leaf_ids(comp.license):
+                all_leaf_ids.add(leaf)
+        else:
+            all_leaf_ids.add("UNSPECIFIED_LICENSE")
+
+    if not all_leaf_ids:
+        return
+
+    print("\n🔍 预检所有许可证标识符...")
+
+    processed: set = set()
+
+    for leaf_id in sorted(all_leaf_ids):
+        if leaf_id.lower() == 'others' or leaf_id in processed:
+            continue
+        processed.add(leaf_id)
+
+        if lm.can_resolve(leaf_id):
+            continue
+
+        # ── Step 1: ask for SPDX identifier (Enter = keep original name) ──
+        print(f"\n⚠️  未知许可证标识符: '{leaf_id}'")
+        print(f"   请输入该许可证对应的SPDX标识符 (如: MIT, Apache-2.0)")
+        print(f"   参考: https://spdx.org/licenses/  或  https://scancode-licensedb.aboutcode.org/")
+        print(f"   直接回车则以 '{leaf_id}' 作为标识符，无需建立别名:")
+        user_input = input("   > ").strip()
+
+        if user_input:
+            resolved_id = user_input
+            lm.add_alias(leaf_id, resolved_id)
+            print(f"   ✅ 已保存别名: '{leaf_id}' → '{resolved_id}'")
+        else:
+            resolved_id = leaf_id
+            print(f"   (使用 '{leaf_id}' 作为许可证标识符)")
+
+        # ── Step 2: if resolved ID still has no text → must provide text ──
+        if lm.can_resolve(resolved_id):
+            continue
+
+        print(f"\n⚠️  licenses.yaml 中缺少许可证文本: '{resolved_id}'")
+        _prompt_license_text(lm, resolved_id)
+
 def main():
     """
     Main entry point for the Attribution Generator.
@@ -67,6 +164,7 @@ def main():
     
     LICENSE_CONFIG = config.get("license_config", "licenses.yaml")
     TEMPLATE_CONFIG = config.get("template_config", "templates.yaml")
+    ALIAS_CONFIG = config.get("alias_config", "license_aliases.yaml")
     LICENSE_SERIAL_STARTS = config.get("license_serial_starts", {})
     COMPONENT_SPACING = config.get("component_spacing", 1)
     SHOW_SOURCE_URL = config.get("show_source_url", False)
@@ -82,7 +180,8 @@ def main():
             PROJECT_NAME, COPYRIGHT_HOLDER_FULL, COPYRIGHT_HOLDER_SHORT,
             license_serial_starts=LICENSE_SERIAL_STARTS,
             component_spacing=COMPONENT_SPACING,
-            show_source_url=SHOW_SOURCE_URL
+            show_source_url=SHOW_SOURCE_URL,
+            alias_config=ALIAS_CONFIG
         )
         
         # Check if input file exists
@@ -92,33 +191,75 @@ def main():
             
         # Load components from input file
         print(f"📖 Reading components from: {INPUT_FILE}")
-        component_list = generator.load_components(INPUT_FILE) 
-        
-        # Report on loaded components
+        component_list = generator.load_components(INPUT_FILE)
+        raw_count = len(component_list)
+
         if not component_list:
             print("ℹ️ No components loaded.")
-        else:
-            print(f"✅ Loaded {len(component_list)} components.")
-            # Group and display components by license
-            grouped = generator.group_by_license(component_list)
-            print("\n📊 Components by license expression:")
-            if grouped:
-                for license_expr, comps in sorted(grouped.items(), key=lambda x: x[0].lower()): 
-                    print(f"  • \"{license_expr}\": {len(comps)} component(s)")
-            else:
-                print("  No components to summarize.")
-                
+            print("\n🎉 Done!")
+            return 0
+
+        print(f"✅ Loaded {raw_count} components.")
+
+        # Deduplicate (all fields identical = duplicate)
+        component_list = generator.deduplicate_components(component_list)
+        dedup_count = len(component_list)
+
+        # Pre-flight: resolve unknown licenses interactively before generating
+        preflight_check(generator, component_list)
+
+        # ── Helper: write attribution text to file ──────────────────────────
+        def _write_attribution(comps):
+            text = generator.generate_attribution(comps)
+            Path(OUTPUT_FILE).write_text(text, encoding='utf-8')
+
         # Generate attribution file
         print(f"\n🔨 Generating attribution file to: {OUTPUT_FILE}")
-        generator.generate_from_file(input_file=INPUT_FILE, output_file=OUTPUT_FILE)
+        _write_attribution(component_list)
         print(f"✅ Attribution file generated: {Path(OUTPUT_FILE).resolve()}")
-        # 输出未找到的license
+
+        # Safety net: licenses still missing after generation
+        # (e.g. UNSPECIFIED_LICENSE or edge cases not caught by preflight)
         missing = set(generator.license_manager.missing_licenses)
         if missing:
-            print("\n⚠️ The following license(s) were referenced but not found in licenses.yaml:")
-            for lic in sorted(missing):
-                print(f"  - {lic}")
-            print("请补充完整这些license的文本到licenses.yaml后再生成归属文件。\n")
+            print(f"\n⚠️  以下 {len(missing)} 个许可证文本在生成过程中仍未找到，请逐一补充:")
+            lm = generator.license_manager
+            for lic_id in sorted(missing):
+                print(f"\n── '{lic_id}' ──")
+                _prompt_license_text(lm, lic_id)
+
+            print(f"\n🔄 重新生成归属文件（已补充许可证文本）...")
+            lm.missing_licenses.clear()
+            _write_attribution(component_list)
+            still_missing = set(lm.missing_licenses)
+            if still_missing:
+                print(f"⚠️  仍有 {len(still_missing)} 个许可证文本缺失（已写入占位符）: {sorted(still_missing)}")
+            else:
+                print(f"✅ 重新生成完成: {Path(OUTPUT_FILE).resolve()}")
+
+        # ── Final summary ────────────────────────────────────────────────────
+        from collections import Counter
+        lm = generator.license_manager
+        license_counts: Counter = Counter()
+        for comp in component_list:
+            raw_expr = comp.license if comp.license and comp.license.strip() else "UNSPECIFIED_LICENSE"
+            display_expr = lm.normalize_expression(raw_expr)
+            license_counts[display_expr] += 1
+
+        removed_count = raw_count - dedup_count
+        print(f"\n{'='*44}")
+        print(f"📊 生成摘要")
+        print(f"{'='*44}")
+        print(f"  输入组件数:   {raw_count}")
+        if removed_count:
+            print(f"  去重后数量:   {dedup_count}  （移除 {removed_count} 个重复）")
+        else:
+            print(f"  去重后数量:   {dedup_count}  （无重复）")
+        print(f"  许可证种类:   {len(license_counts)} 种")
+        for lic_expr, count in sorted(license_counts.items(), key=lambda x: x[0].lower()):
+            print(f"    • {lic_expr}: {count} 个组件")
+        print(f"{'='*44}")
+
         print("\n🎉 Done!")
         
     except FileNotFoundError as e: 

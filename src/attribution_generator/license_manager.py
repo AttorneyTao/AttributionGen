@@ -10,7 +10,7 @@ This module provides the LicenseManager class that handles:
 
 import yaml
 from pathlib import Path
-from typing import Dict, Set, Tuple
+from typing import Dict, List, Set, Tuple
 import re
 
 class LicenseManager:
@@ -88,15 +88,20 @@ class LicenseManager:
     4. Handling special cases and error conditions
     """
 
-    def __init__(self, license_config_path: str = "licenses.yaml"):
+    def __init__(self, license_config_path: str = "licenses.yaml",
+                 alias_config_path: str = "license_aliases.yaml"):
         """
         Initialize the license manager.
-        
+
         Args:
-            license_config_path: Path to license configuration file
+            license_config_path: Path to license configuration file (licenses.yaml)
+            alias_config_path: Path to alias table file (license_aliases.yaml)
         """
         self.license_config_path = Path(license_config_path)
+        self.alias_config_path = Path(alias_config_path)
+        self._license_original_case: Dict[str, str] = {}  # populated by _load_licenses
         self.licenses = self._load_licenses()
+        self.aliases = self._load_aliases()
         self.missing_licenses = set()
 
     def _load_licenses(self) -> Dict[str, str]:
@@ -121,11 +126,221 @@ class LicenseManager:
                 if not isinstance(loaded_licenses, dict):
                     print(f"⚠️ Warning: License configuration file '{self.license_config_path}' is not a valid dictionary. Licenses may not load correctly.")
                     return {}
-                # 关键：全部转小写
+                # Build a lowercase → original-case mapping so we can recover
+                # canonical SPDX casing (e.g. "bsd-3-clause" → "BSD-3-Clause")
+                self._license_original_case: Dict[str, str] = {
+                    str(k).lower(): str(k) for k in loaded_licenses
+                }
                 return {str(k).lower(): v for k, v in loaded_licenses.items()}
         except Exception as e:
             print(f"⚠️ Error loading license configuration file '{self.license_config_path}': {e}. No license texts will be available.")
             return {}
+
+    @staticmethod
+    def _normalize_id(lic_id: str) -> str:
+        """
+        Normalize a license identifier for fuzzy matching.
+
+        Replaces every run of whitespace characters (including non-breaking spaces
+        such as U+00A0, U+2009, U+202F, etc.) with a single hyphen, collapses
+        consecutive hyphens, strips leading/trailing hyphens, and lowercases the
+        result.
+
+        Examples:
+            'BSD  3-Clause'  -> 'bsd-3-clause'
+            'Apache\\xa02.0' -> 'apache-2.0'
+            'MIT'            -> 'mit'
+        """
+        # \s covers ASCII whitespace; the character class also catches common
+        # Unicode space variants that \s may miss depending on the Python build.
+        normalized = re.sub(r'[\s\xa0\u2000-\u200b\u202f\u205f\u3000]+', '-', lic_id.strip())
+        normalized = re.sub(r'-{2,}', '-', normalized)
+        return normalized.strip('-').lower()
+
+    def _load_aliases(self) -> Dict[str, str]:
+        """
+        Load license alias table from configuration file.
+
+        Keys are normalized via _normalize_id so that lookups are space-insensitive
+        and hyphen-normalised.  Values keep their original SPDX casing.
+
+        Returns:
+            Dictionary mapping normalized alias strings to SPDX identifiers.
+            Returns empty dict if file not found.
+        """
+        if not self.alias_config_path.exists():
+            return {}
+        try:
+            with open(self.alias_config_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            if not isinstance(data, dict):
+                return {}
+            return {self._normalize_id(str(k)): str(v) for k, v in data.items()}
+        except Exception as e:
+            print(f"⚠️ Warning: Could not load alias config '{self.alias_config_path}': {e}")
+            return {}
+
+    def resolve_id(self, lic_id: str) -> str:
+        """
+        Resolve a license identifier to its canonical SPDX identifier.
+
+        Lookup order:
+          1. Exact lowercase match in alias table.
+          2. Normalized form (spaces → hyphens) match in alias table.
+
+        Args:
+            lic_id: The license identifier to resolve (may be non-SPDX).
+
+        Returns:
+            The SPDX identifier if a mapping exists, otherwise lic_id unchanged.
+        """
+        # Try exact lowercase first (handles IDs that are already SPDX-like)
+        hit = self.aliases.get(lic_id.lower())
+        if hit:
+            return hit
+        # Try normalized form
+        return self.aliases.get(self._normalize_id(lic_id), lic_id)
+
+    def can_resolve(self, lic_id: str) -> bool:
+        """
+        Return True if lic_id can be resolved to a known license text via any path:
+        direct lookup, normalization, or alias table.
+        """
+        if lic_id.lower() in self.licenses:
+            return True
+        if self._normalize_id(lic_id) in self.licenses:
+            return True
+        resolved = self.resolve_id(lic_id)
+        return resolved.lower() in self.licenses
+
+    def _canonical_id(self, lic_id: str) -> str:
+        """
+        Return the canonical SPDX identifier for a single license leaf.
+
+        Resolution order:
+          1. Alias table → returns the alias value (already canonical SPDX casing).
+          2. Normalized form matched in licenses → recover original YAML key casing.
+          3. Direct lowercase match → recover original YAML key casing.
+          4. Not found → return lic_id unchanged.
+
+        'others' is returned as-is (it is a special structural token, not a SPDX ID).
+        """
+        if lic_id.lower() == 'others':
+            return lic_id
+
+        # Alias table has canonical SPDX casing as its values
+        resolved = self.resolve_id(lic_id)
+        if resolved != lic_id:
+            return resolved
+
+        # Try to recover original YAML casing via the original-case map
+        normalized = self._normalize_id(lic_id)
+        if normalized in self._license_original_case:
+            return self._license_original_case[normalized]
+        if lic_id.lower() in self._license_original_case:
+            return self._license_original_case[lic_id.lower()]
+
+        return lic_id  # unknown — leave as-is
+
+    def normalize_expression(self, expression: str) -> str:
+        """
+        Normalize a full license expression by replacing every leaf ID with its
+        canonical SPDX identifier and uppercasing the AND / OR / WITH operators.
+
+        Examples:
+            'gpl-2.0 and others'        → 'GPL-2.0-only AND others'
+            'bsd  3-clause'             → 'BSD-3-Clause'
+            'Apache-2.0 AND MIT'        → 'Apache-2.0 AND MIT'  (unchanged)
+        """
+        if not expression or not expression.strip():
+            return expression
+
+        def render(node) -> str:
+            if node is None:
+                return ''
+            if node.kind == 'LEAF':
+                return self._canonical_id(node.value)
+            if node.kind == 'WITH':
+                left = render(node.left)
+                exc = self._canonical_id(node.exception) if node.exception else ''
+                return f'{left} WITH {exc}'
+            if node.kind == 'AND':
+                return f'{render(node.left)} AND {render(node.right)}'
+            if node.kind == 'OR':
+                return f'{render(node.left)} OR {render(node.right)}'
+            return expression
+
+        return render(self._parse_expr(expression))
+
+    def get_leaf_ids(self, expression: str) -> List[str]:
+        """
+        Extract all individual license identifiers (leaf nodes) from a license expression.
+
+        Args:
+            expression: SPDX-style license expression, possibly containing AND/OR/WITH.
+
+        Returns:
+            List of leaf license ID strings (excludes the special 'others' token).
+        """
+        def collect(node, result):
+            if node is None:
+                return
+            if node.kind == 'LEAF':
+                val = node.value.strip()
+                if val.lower() != 'others':
+                    result.append(val)
+            elif node.kind == 'WITH':
+                collect(node.left, result)
+                if node.exception:
+                    exc = node.exception.strip()
+                    if exc.lower() != 'others':
+                        result.append(exc)
+            else:  # AND or OR
+                collect(node.left, result)
+                collect(node.right, result)
+
+        result: List[str] = []
+        if expression and expression.strip():
+            tree = self._parse_expr(expression)
+            collect(tree, result)
+        return result
+
+    def add_alias(self, alias: str, spdx_id: str) -> None:
+        """
+        Add a new alias mapping and persist it to the alias config file.
+
+        The alias key is normalized (spaces → hyphens, lowercased) before storage
+        so it is consistent with the normalization applied during lookup.
+
+        Args:
+            alias: The non-standard identifier to map.
+            spdx_id: The canonical SPDX identifier it maps to.
+        """
+        alias_key = self._normalize_id(alias)
+        self.aliases[alias_key] = spdx_id
+        try:
+            with open(self.alias_config_path, 'a', encoding='utf-8') as f:
+                f.write(f'{alias_key}: {spdx_id}\n')
+        except Exception as e:
+            print(f"⚠️ Warning: Could not save alias to '{self.alias_config_path}': {e}")
+
+    def add_license_text(self, spdx_id: str, text: str) -> None:
+        """
+        Add a new license text entry and append it to licenses.yaml.
+
+        Args:
+            spdx_id: The SPDX identifier for the license.
+            text: The full license text.
+        """
+        self.licenses[spdx_id.lower()] = text
+        self._license_original_case[spdx_id.lower()] = spdx_id
+        try:
+            with open(self.license_config_path, 'a', encoding='utf-8') as f:
+                f.write(f'\n{spdx_id}: |\n')
+                for line in text.splitlines():
+                    f.write(f'  {line}\n')
+        except Exception as e:
+            print(f"⚠️ Warning: Could not save license text to '{self.license_config_path}': {e}")
 
     def _get_individual_license_text(self, lic_id: str, include_header: bool = True) -> Tuple[str, str]:
         """
@@ -153,11 +368,28 @@ class LicenseManager:
             )
             header = f"Regarding '{lic_id}' conditions:"
         else:
+            # --- Resolution order ---
+            # 1. Exact lowercase match in licenses.yaml
+            # 2. Normalized form (spaces → hyphens) direct match in licenses.yaml
+            # 3. Alias table lookup (also uses normalization internally)
             if lic_id.lower() in self.licenses:
                 text = self.licenses[lic_id.lower()]
             else:
-                text = f"ERROR: License text for '{lic_id}' not found in '{self.license_config_path}'. Please add the full text for this license."
-                self.missing_licenses.add(lic_id)
+                normalized_key = self._normalize_id(lic_id)
+                if normalized_key in self.licenses:
+                    # Normalized form matched a known SPDX entry directly
+                    text = self.licenses[normalized_key]
+                else:
+                    # Try alias resolution (resolve_id also applies normalization)
+                    resolved_id = self.resolve_id(lic_id)
+                    if resolved_id.lower() in self.licenses:
+                        text = self.licenses[resolved_id.lower()]
+                        if include_header and resolved_id.lower() != lic_id.lower():
+                            header = f"For license: {resolved_id}"
+                    else:
+                        missing_id = resolved_id if resolved_id.lower() != lic_id.lower() else lic_id
+                        text = f"ERROR: License text for '{missing_id}' not found in '{self.license_config_path}'. Please add the full text for this license."
+                        self.missing_licenses.add(missing_id)
         return header, text
 
     def get_license_text(self, license_expression: str, include_license_headers: bool = True) -> str:
