@@ -28,6 +28,8 @@ class LicenseManager:
         返回表达式树根节点。
         """
         expr = expr.strip()
+        # 将分号视为 AND（SPDX 扩展语义）
+        expr = re.sub(r'\s*;\s*', ' AND ', expr)
         # 括号优先
         if expr.startswith('(') and expr.endswith(')'):
             # 去除最外层括号
