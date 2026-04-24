@@ -21,6 +21,38 @@ import datetime
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from attribution_generator.generator import AttributionGenerator
 
+# Risk classification for common SPDX license identifiers.
+# Covers canonical IDs as stored in licenses.yaml / resolved via alias table.
+_RISK_HIGH = "high"
+_RISK_MEDIUM = "medium"
+
+LICENSE_RISK_TABLE = {
+    # ── 高风险：强著佐权（Copyleft） ────────────────────────────────────────
+    "GPL-2.0-only":      (_RISK_HIGH,   "强著佐权：分发衍生作品须以 GPL-2.0 开源"),
+    "GPL-2.0-or-later":  (_RISK_HIGH,   "强著佐权：分发衍生作品须以 GPL-2.0+ 开源"),
+    "GPL-3.0-only":      (_RISK_HIGH,   "强著佐权：分发衍生作品须以 GPL-3.0 开源"),
+    "GPL-3.0-or-later":  (_RISK_HIGH,   "强著佐权：分发衍生作品须以 GPL-3.0+ 开源"),
+    "AGPL-3.0-only":     (_RISK_HIGH,   "网络著佐权：通过网络提供服务亦须开源，风险极高"),
+    "AGPL-3.0-or-later": (_RISK_HIGH,   "网络著佐权：通过网络提供服务亦须开源，风险极高"),
+    "SSPL-1.0":          (_RISK_HIGH,   "服务著佐权：以此软件对外提供服务须开源整个服务栈"),
+    "OSL-3.0":           (_RISK_HIGH,   "强著佐权：所有衍生作品须以 OSL-3.0 发布"),
+    # ── 中等风险：弱著佐权（Weak Copyleft） ─────────────────────────────────
+    "LGPL-2.0-only":     (_RISK_MEDIUM, "弱著佐权：动态链接通常允许，静态链接须注意"),
+    "LGPL-2.0-or-later": (_RISK_MEDIUM, "弱著佐权：动态链接通常允许，静态链接须注意"),
+    "LGPL-2.1-only":     (_RISK_MEDIUM, "弱著佐权：动态链接通常允许，静态链接须注意"),
+    "LGPL-2.1-or-later": (_RISK_MEDIUM, "弱著佐权：动态链接通常允许，静态链接须注意"),
+    "LGPL-3.0-only":     (_RISK_MEDIUM, "弱著佐权：动态链接通常允许，静态链接须注意"),
+    "LGPL-3.0-or-later": (_RISK_MEDIUM, "弱著佐权：动态链接通常允许，静态链接须注意"),
+    "MPL-2.0":           (_RISK_MEDIUM, "文件级著佐权：被修改的文件须以 MPL-2.0 开源"),
+    "CDDL-1.0":          (_RISK_MEDIUM, "文件级著佐权：被修改的文件须以 CDDL-1.0 开源"),
+    "EPL-1.0":           (_RISK_MEDIUM, "插件著佐权：与 EPL 代码链接的模块可能须开源"),
+    "EPL-2.0":           (_RISK_MEDIUM, "插件著佐权：与 EPL 代码链接的模块可能须开源"),
+    "EUPL-1.1":          (_RISK_MEDIUM, "弱著佐权：修改版须以 EUPL 或兼容许可证开源"),
+    "EUPL-1.2":          (_RISK_MEDIUM, "弱著佐权：修改版须以 EUPL 或兼容许可证开源"),
+    "CPAL-1.0":          (_RISK_MEDIUM, "广告条款著佐权：修改版须保留原始归属信息"),
+    "CDLA-Sharing-1.0":  (_RISK_MEDIUM, "数据著佐权：共享衍生数据集须以相同条款发布"),
+}
+
 
 def _prompt_license_text(lm, lic_id: str) -> bool:
     """
@@ -118,6 +150,58 @@ def preflight_check(generator: AttributionGenerator, component_list: list) -> No
         print(f"\n⚠️  licenses.yaml 中缺少许可证文本: '{resolved_id}'")
         _prompt_license_text(lm, resolved_id)
 
+def check_license_risks(generator: AttributionGenerator, component_list: list) -> None:
+    """
+    Scan all components for medium/high-risk licenses and print a CLI warning
+    block.  Called after preflight_check so aliases are already resolved.
+    """
+    lm = generator.license_manager
+    # findings: spdx_id → {risk, desc, components: [name, ...]}
+    findings = {}
+    for comp in component_list:
+        if not comp.license or not comp.license.strip():
+            continue
+        for leaf_id in lm.get_leaf_ids(comp.license):
+            resolved = lm.resolve_id(leaf_id)
+            if resolved in LICENSE_RISK_TABLE:
+                risk_level, desc = LICENSE_RISK_TABLE[resolved]
+                entry = findings.setdefault(resolved, {"risk": risk_level, "desc": desc, "components": []})
+                entry["components"].append(comp.name)
+
+    if not findings:
+        return
+
+    high = {k: v for k, v in findings.items() if v["risk"] == _RISK_HIGH}
+    medium = {k: v for k, v in findings.items() if v["risk"] == _RISK_MEDIUM}
+
+    print(f"\n{'='*44}")
+    print("⚠️   许可证风险预警")
+    print(f"{'='*44}")
+
+    if high:
+        print("🔴 高风险（强著佐权 Copyleft）:")
+        for spdx_id, info in sorted(high.items()):
+            names = ", ".join(info["components"])
+            count = len(info["components"])
+            print(f"  • {spdx_id}")
+            print(f"    风险: {info['desc']}")
+            print(f"    涉及组件 ({count}): {names}")
+
+    if medium:
+        if high:
+            print()
+        print("🟡 中等风险（弱著佐权 Weak Copyleft）:")
+        for spdx_id, info in sorted(medium.items()):
+            names = ", ".join(info["components"])
+            count = len(info["components"])
+            print(f"  • {spdx_id}")
+            print(f"    风险: {info['desc']}")
+            print(f"    涉及组件 ({count}): {names}")
+
+    print(f"{'='*44}")
+    print("💡 建议: 请法务团队审查上述许可证的合规要求。")
+
+
 def main():
     """
     Main entry point for the Attribution Generator.
@@ -207,6 +291,9 @@ def main():
 
         # Pre-flight: resolve unknown licenses interactively before generating
         preflight_check(generator, component_list)
+
+        # Risk warning: flag medium/high-risk licenses before generating
+        check_license_risks(generator, component_list)
 
         # ── Helper: write attribution text to file ──────────────────────────
         def _write_attribution(comps):
