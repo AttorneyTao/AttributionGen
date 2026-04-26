@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run python -c ':*)"
+      "Bash(uv run python -c ':*)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe main.py --from-inputs)",
+      "Bash(.venv/Scripts/python.exe -X utf8 main.py --from-inputs)",
+      "Bash(.venv/Scripts/python.exe -X utf8 main.py components.xlsx)"
     ]
   }
 }

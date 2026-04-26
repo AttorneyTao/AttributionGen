@@ -186,7 +186,22 @@ class AttributionGenerator:
                 raise ValueError(f"Error reading {input_path.name}: {e}")
         else:
             raise ValueError(f"Unsupported input file: {input_path.suffix}.")
+
+        self._patch_others_in_license(components)
         return components
+
+    @staticmethod
+    def _patch_others_in_license(components: list) -> None:
+        """
+        For any component that has others_url set but whose license expression does
+        not already contain 'others', append ' AND others' to the expression.
+        This ensures the others_url is actually rendered in the output.
+        """
+        for comp in components:
+            if comp.others_url and comp.others_url.strip():
+                if 'others' not in (comp.license or '').lower():
+                    base = (comp.license or '').strip()
+                    comp.license = f"{base} AND others" if base else "others"
 
     def group_by_license(self, components: List[Component]) -> Dict[str, List[Component]]:
         """

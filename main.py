@@ -14,12 +14,15 @@ It handles:
 4. Error handling and reporting
 """
 import sys
+import argparse
 from pathlib import Path
 import yaml
 import datetime
+import pandas as pd
 # Add src directory to Python path to allow importing from the package
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from attribution_generator.generator import AttributionGenerator
+from attribution_generator.component import Component
 
 # Risk classification for common SPDX license identifiers.
 # Covers canonical IDs as stored in licenses.yaml / resolved via alias table.
@@ -202,25 +205,163 @@ def check_license_risks(generator: AttributionGenerator, component_list: list) -
     print("💡 建议: 请法务团队审查上述许可证的合规要求。")
 
 
+# ── Column patterns for Tencent-style Excel input ──────────────────────────────
+# Each entry maps a Component field (or '_distribute' filter) to a list of
+# substrings that may appear in the actual column header (case-insensitive).
+_INPUTS_COLUMN_PATTERNS: dict = {
+    'name':        ['组件/模型名称', '组件名称', '名称'],
+    'version':     ['组件/模型版本号', '版本号', '版本'],
+    'repository':  ['组件/模型下载地址', '下载地址'],
+    'modified':    ['是否修改'],
+    'license':     ['开源协议名称', '协议名称', '许可证名称', '许可证'],
+    'copyright':   ['版权信息', '版权'],
+    'others_url':  ['third_party', 'third party', 'others_url', 'others url'],
+    '_distribute': ['是否分发'],
+}
+
+
+def _detect_header_row(excel_path: Path, max_scan: int = 5) -> int:
+    """
+    Scan the first few rows to find the one that looks like a column header.
+    Returns the 0-based row index suitable for passing as pandas header=.
+    """
+    df_raw = pd.read_excel(excel_path, header=None, dtype=str, nrows=max_scan)
+    df_raw.fillna('', inplace=True)
+    keywords = ['是否分发', '名称', '版本', 'third_party', 'license', 'name']
+    best_row, best_score = 0, 0
+    for i, row in df_raw.iterrows():
+        row_text = ' '.join(str(v) for v in row).lower()
+        score = sum(1 for kw in keywords if kw.lower() in row_text)
+        if score > best_score:
+            best_score, best_row = score, i
+    return best_row
+
+
+def _map_columns(headers: list) -> dict:
+    """
+    Match actual column headers against _INPUTS_COLUMN_PATTERNS.
+    Returns {field: actual_column_name} for every pattern that matched.
+    """
+    mapping: dict = {}
+    for field, patterns in _INPUTS_COLUMN_PATTERNS.items():
+        for header in headers:
+            h = str(header).strip()
+            if any(p.lower() in h.lower() for p in patterns):
+                mapping[field] = h
+                break
+    return mapping
+
+
+def select_and_load_inputs_excel() -> list | None:
+    """
+    Interactive loader for Tencent-style component Excel files in ./inputs/.
+
+    Steps:
+      1. List all .xlsx / .xls files in the inputs/ directory.
+      2. Let the user pick one by number.
+      3. Auto-detect the real header row (skips merged description rows).
+      4. Filter to rows where '是否分发' == '是'.
+      5. Map columns to Component fields; third_party → others_url (optional).
+
+    Returns a list of Component objects, or None on unrecoverable error.
+    """
+    inputs_dir = Path('inputs')
+    if not inputs_dir.exists():
+        print("❌ 未找到 'inputs' 目录。")
+        return None
+
+    excel_files = sorted(
+        list(inputs_dir.glob('*.xlsx')) + list(inputs_dir.glob('*.xls'))
+    )
+    if not excel_files:
+        print("❌ 'inputs/' 目录中未找到 Excel 文件。")
+        return None
+
+    print("\n📂 'inputs/' 目录中的 Excel 文件：")
+    for i, f in enumerate(excel_files, 1):
+        print(f"  {i}. {f.name}")
+
+    while True:
+        try:
+            raw = input(f"\n请选择文件编号 (1-{len(excel_files)}): ").strip()
+            idx = int(raw) - 1
+            if 0 <= idx < len(excel_files):
+                selected = excel_files[idx]
+                break
+            print(f"  请输入 1 到 {len(excel_files)} 之间的数字。")
+        except ValueError:
+            print("  请输入有效数字。")
+
+    print(f"📖 已选择: {selected.name}")
+
+    header_row = _detect_header_row(selected)
+    df = pd.read_excel(selected, header=header_row, dtype=str)
+    df.fillna('', inplace=True)
+
+    col_map = _map_columns(list(df.columns))
+
+    # Validate required columns
+    missing = [f for f in ('name', 'license', 'copyright') if f not in col_map]
+    if missing:
+        print(f"❌ 无法识别以下必需列: {missing}")
+        print(f"   当前识别到的列: {list(df.columns)}")
+        return None
+
+    # Filter by 是否分发 == 是
+    dist_col = col_map.get('_distribute')
+    if dist_col:
+        before = len(df)
+        df = df[df[dist_col].str.strip() == '是'].copy()
+        after = len(df)
+        print(f"🔍 按「是否分发=是」过滤: {before} 行 → {after} 行")
+    else:
+        print("⚠️  未找到「是否分发」列，将使用全部行。")
+
+    if df.empty:
+        print("ℹ️  过滤后无数据。")
+        return []
+
+    def _get(row, field):
+        col = col_map.get(field)
+        if col is None:
+            return None
+        val = str(row.get(col, '')).strip()
+        return val if val else None
+
+    components = []
+    for _, row in df.iterrows():
+        modified_raw = _get(row, 'modified') or ''
+        modified = modified_raw.strip() in ('是', '1', 'yes', 'true', 'y', 't')
+        comp = Component(
+            name=_get(row, 'name') or '',
+            copyright=_get(row, 'copyright') or '',
+            license=_get(row, 'license') or '',
+            version=_get(row, 'version'),
+            repository=_get(row, 'repository'),
+            modified=modified,
+            others_url=_get(row, 'others_url'),
+        )
+        components.append(comp)
+
+    # 与 generator.load_components() 保持一致：
+    # 有 others_url 但 license 里没有 'others' 的组件，自动追加 AND others
+    AttributionGenerator._patch_others_in_license(components)
+
+    return components
+
+
 def main():
     """
     Main entry point for the Attribution Generator.
-    
-    This function:
-    1. Sets up global project configuration
-    2. Initializes the AttributionGenerator
-    3. Loads components from input file
-    4. Generates attribution file
-    5. Handles errors and provides user feedback
-    
+
     Command line usage:
-        python main.py [input_file] [output_file]
-    
+        python main.py [input_file]          # explicit file
+        python main.py -i / --from-inputs    # pick from inputs/ directory
+
     Returns:
         int: 0 for success, 1 for failure
     """
     # --- Global Configuration ---
-    # These values are used in the generated attribution file
     CONFIG_FILE = "project_config.yaml"
     if not Path(CONFIG_FILE).exists():
         print(f"❌ Error: Config file '{CONFIG_FILE}' not found.")
@@ -231,12 +372,28 @@ def main():
     PROJECT_NAME = config.get("project_name", "Unknown Project")
     COPYRIGHT_HOLDER_FULL = config.get("copyright_holder_full", "")
     COPYRIGHT_HOLDER_SHORT = config.get("copyright_holder_short", "")
-    
-    # Handle command line arguments or use config defaults
-    if len(sys.argv) >= 2:
-        INPUT_FILE = sys.argv[1]
-    else:
-        INPUT_FILE = config.get("input_file", "components.xlsx")
+
+    # --- Argument parsing ---
+    parser = argparse.ArgumentParser(
+        description='OSS Attribution Generator',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        'input_file', nargs='?',
+        help='Input file path (xlsx/yaml/json). Defaults to project_config.yaml input_file.',
+    )
+    parser.add_argument(
+        '-i', '--from-inputs', action='store_true',
+        help='Interactively select an Excel file from the ./inputs/ directory.',
+    )
+    args = parser.parse_args()
+
+    use_inputs_dir = args.from_inputs
+    if not use_inputs_dir:
+        if args.input_file:
+            INPUT_FILE = args.input_file
+        else:
+            INPUT_FILE = config.get("input_file", "components.xlsx")
         
     # 生成带时间戳的输出文件名
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -267,15 +424,19 @@ def main():
             show_source_url=SHOW_SOURCE_URL,
             alias_config=ALIAS_CONFIG
         )
-        
-        # Check if input file exists
-        if not Path(INPUT_FILE).exists():
-            print(f"❌ Error: Input file '{INPUT_FILE}' not found.")
-            return 1 
-            
-        # Load components from input file
-        print(f"📖 Reading components from: {INPUT_FILE}")
-        component_list = generator.load_components(INPUT_FILE)
+
+        # Load components — two paths depending on --from-inputs flag
+        if use_inputs_dir:
+            component_list = select_and_load_inputs_excel()
+            if component_list is None:
+                return 1
+        else:
+            if not Path(INPUT_FILE).exists():
+                print(f"❌ Error: Input file '{INPUT_FILE}' not found.")
+                return 1
+            print(f"📖 Reading components from: {INPUT_FILE}")
+            component_list = generator.load_components(INPUT_FILE)
+
         raw_count = len(component_list)
 
         if not component_list:
